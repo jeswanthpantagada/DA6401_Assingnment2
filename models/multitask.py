@@ -5,14 +5,112 @@ import os
 import torch
 import torch.nn as nn
 
-from .classification import VGG11Classifier
-from .localization import LocalizationModel
-from .segmentation import UNetVGG11
 from .vgg11 import VGG11Encoder
 
 
+class _CheckpointClassifier(nn.Module):
+    """Classifier architecture compatible with classifier.pth."""
+
+    def __init__(self, num_classes: int = 37, in_channels: int = 3):
+        super(_CheckpointClassifier, self).__init__()
+        self.encoder = VGG11Encoder(in_channels=in_channels)
+        self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
+        self.classifier = nn.Sequential(
+            nn.Identity(),
+            nn.Linear(512 * 7 * 7, 4096),
+            nn.BatchNorm1d(4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.5),
+            nn.Linear(4096, 4096),
+            nn.BatchNorm1d(4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.5),
+            nn.Linear(4096, num_classes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.encoder(x)
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        return self.classifier(x)
+
+
+class _CheckpointLocalizer(nn.Module):
+    """Localization architecture compatible with localizer.pth."""
+
+    def __init__(self, in_channels: int = 3):
+        super(_CheckpointLocalizer, self).__init__()
+        self.encoder = VGG11Encoder(in_channels=in_channels)
+        self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
+        self.localization_head = nn.Sequential(
+            nn.Identity(),
+            nn.Linear(512 * 7 * 7, 1024),
+            nn.BatchNorm1d(1024),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.3),
+            nn.Linear(1024, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(p=0.3),
+            nn.Linear(256, 4),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.encoder(x)
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        return self.localization_head(x)
+
+
+class _DecodeBlock(nn.Module):
+    """Decoder block whose parameter names match the saved U-Net checkpoint."""
+
+    def __init__(self, in_channels: int, out_channels: int, skip_channels: int):
+        super(_DecodeBlock, self).__init__()
+        self.up = nn.ConvTranspose2d(
+            in_channels, out_channels, kernel_size=2, stride=2
+        )
+        self.conv = nn.Sequential(
+            nn.Conv2d(out_channels + skip_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Identity(),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
+        x = self.up(x)
+        x = torch.cat([x, skip], dim=1)
+        return self.conv(x)
+
+
+class _CheckpointUNet(nn.Module):
+    """Segmentation architecture compatible with unet.pth."""
+
+    def __init__(self, num_classes: int = 3, in_channels: int = 3):
+        super(_CheckpointUNet, self).__init__()
+        self.encoder = VGG11Encoder(in_channels=in_channels)
+        self.decode4 = _DecodeBlock(512, 512, 512)
+        self.decode3 = _DecodeBlock(512, 256, 256)
+        self.decode2 = _DecodeBlock(256, 128, 128)
+        self.decode1 = _DecodeBlock(128, 64, 64)
+        self.final_conv = nn.Conv2d(64, num_classes, kernel_size=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        _, skips = self.encoder(x, return_features=True)
+        x = skips["s5"]
+        x = self.decode4(x, skips["s4"])
+        x = self.decode3(x, skips["s3"])
+        x = self.decode2(x, skips["s2"])
+        x = self.decode1(x, skips["s1"])
+        return self.final_conv(x)
+
+
 class MultiTaskPerceptionModel(nn.Module):
-    """Unified wrapper over the three trained task-specific models."""
+    """Unified wrapper over the three trained task-specific checkpoints."""
 
     def __init__(
         self,
@@ -64,14 +162,14 @@ class MultiTaskPerceptionModel(nn.Module):
                 quiet=False,
             )
 
-        self.classifier = VGG11Classifier(num_classes=num_breeds)
-        self.localizer = LocalizationModel(
-            VGG11Encoder(in_channels=in_channels),
-            freeze_early=False,
+        self.classifier = _CheckpointClassifier(
+            num_classes=num_breeds,
+            in_channels=in_channels,
         )
-        self.segmenter = UNetVGG11(
-            VGG11Encoder(in_channels=in_channels),
+        self.localizer = _CheckpointLocalizer(in_channels=in_channels)
+        self.segmenter = _CheckpointUNet(
             num_classes=seg_classes,
+            in_channels=in_channels,
         )
 
         self._load_model_weights(self.classifier, classifier_path)
@@ -105,7 +203,7 @@ class MultiTaskPerceptionModel(nn.Module):
 
     def _load_model_weights(self, model: nn.Module, checkpoint_path: str):
         state_dict = self._load_checkpoint(checkpoint_path)
-        model.load_state_dict(state_dict, strict=False)
+        model.load_state_dict(state_dict, strict=True)
 
     def forward(self, x: torch.Tensor):
         """Forward pass for multi-task model.
