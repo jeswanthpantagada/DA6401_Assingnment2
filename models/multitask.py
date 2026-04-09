@@ -45,9 +45,12 @@ class MultiTaskPerceptionModel(nn.Module):
         unet_path = os.path.join("checkpoints", os.path.basename(unet_path))
 
         import gdown
-        gdown.download(id="1JgctJgD9EP8PgL8--0kGrKhfRCWdhRlA", output=classifier_path, quiet=False)
-        gdown.download(id="1M7Lp9zrOneDXCcxlB3-8JNJwJl7zKhCM", output=localizer_path, quiet=False)
-        gdown.download(id="13pAD3ziJMXZAzwWxFSPjQlA6VvvE2-6D", output=unet_path, quiet=False)
+        if not os.path.exists(classifier_path):
+            gdown.download(id="1JgctJgD9EP8PgL8--0kGrKhfRCWdhRlA", output=classifier_path, quiet=False)
+        if not os.path.exists(localizer_path):
+            gdown.download(id="1M7Lp9zrOneDXCcxlB3-8JNJwJl7zKhCM", output=localizer_path, quiet=False)
+        if not os.path.exists(unet_path):
+            gdown.download(id="13pAD3ziJMXZAzwWxFSPjQlA6VvvE2-6D", output=unet_path, quiet=False)
 
         self.encoder = VGG11Encoder(in_channels=in_channels)
         self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
@@ -80,13 +83,24 @@ class MultiTaskPerceptionModel(nn.Module):
         )
 
     def _load_checkpoint(self, checkpoint_path: str):
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        checkpoint = torch.load(
+            checkpoint_path,
+            map_location="cpu",
+            weights_only=False,
+        )
 
-        if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-            checkpoint = checkpoint["state_dict"]
+        if isinstance(checkpoint, dict):
+            if "state_dict" in checkpoint:
+                checkpoint = checkpoint["state_dict"]
+            elif "model_state_dict" in checkpoint:
+                checkpoint = checkpoint["model_state_dict"]
+            elif "weights" in checkpoint:
+                checkpoint = checkpoint["weights"]
 
         cleaned_state_dict = {}
         for key, value in checkpoint.items():
+            if not torch.is_tensor(value):
+                continue
             if key.startswith("module."):
                 key = key[len("module."):]
             cleaned_state_dict[key] = value
