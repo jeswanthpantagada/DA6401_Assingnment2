@@ -5,7 +5,66 @@ import os
 import torch
 import torch.nn as nn
 
+from losses.iou_loss import IoULoss
+from .segmentation import SegmentationLoss
 from .vgg11 import VGG11Encoder
+
+
+class MultiTaskOutput(dict):
+    """Dict output that also supports tuple unpacking."""
+
+    def __iter__(self):
+        yield self["classification"]
+        yield self["localization"]
+        yield self["segmentation"]
+
+
+class MultiTaskLoss(nn.Module):
+    """Combined multi-task loss for training compatibility."""
+
+    def __init__(
+        self,
+        lambda_cls: float = 1.0,
+        lambda_bbox: float = 1.0,
+        lambda_seg: float = 1.0,
+    ):
+        super(MultiTaskLoss, self).__init__()
+        self.lambda_cls = lambda_cls
+        self.lambda_bbox = lambda_bbox
+        self.lambda_seg = lambda_seg
+
+        self.classification_loss = nn.CrossEntropyLoss()
+        self.bbox_mse_loss = nn.MSELoss()
+        self.bbox_iou_loss = IoULoss(reduction="mean")
+        self.segmentation_loss = SegmentationLoss(num_classes=3)
+
+    def forward(
+        self,
+        cls_logits: torch.Tensor,
+        cls_targets: torch.Tensor,
+        bbox_pred: torch.Tensor,
+        bbox_targets: torch.Tensor,
+        seg_logits: torch.Tensor,
+        seg_targets: torch.Tensor,
+    ):
+        cls_loss = self.classification_loss(cls_logits, cls_targets)
+        bbox_loss = (
+            self.bbox_mse_loss(bbox_pred, bbox_targets)
+            + self.bbox_iou_loss(bbox_pred, bbox_targets)
+        )
+        seg_loss = self.segmentation_loss(seg_logits, seg_targets)
+
+        total_loss = (
+            self.lambda_cls * cls_loss
+            + self.lambda_bbox * bbox_loss
+            + self.lambda_seg * seg_loss
+        )
+
+        return total_loss, {
+            "cls": cls_loss.item(),
+            "bbox": bbox_loss.item(),
+            "seg": seg_loss.item(),
+        }
 
 
 class _CheckpointClassifier(nn.Module):
@@ -145,19 +204,19 @@ class MultiTaskPerceptionModel(nn.Module):
         import gdown
         if not os.path.exists(classifier_path):
             gdown.download(
-                id="1JgctJgD9EP8PgL8--0kGrKhfRCWdhRlA",
+                id="1QrvqfuyTOlqndMS6TdqGaJvzB5FYKRNk",
                 output=classifier_path,
                 quiet=False,
             )
         if not os.path.exists(localizer_path):
             gdown.download(
-                id="1M7Lp9zrOneDXCcxlB3-8JNJwJl7zKhCM",
+                id="1EWb8dx2vnf_nEmD_4yvGSXuqECQ9jkCQ",
                 output=localizer_path,
                 quiet=False,
             )
         if not os.path.exists(unet_path):
             gdown.download(
-                id="13pAD3ziJMXZAzwWxFSPjQlA6VvvE2-6D",
+                id="120pP0rwv6Kw28qdwd6f2VgyM4s3DjwUn",
                 output=unet_path,
                 quiet=False,
             )
@@ -227,11 +286,11 @@ class MultiTaskPerceptionModel(nn.Module):
         localization[:, 2] = localization[:, 2] * width
         localization[:, 3] = localization[:, 3] * height
 
-        return {
-            "classification": classification,
-            "localization": localization,
-            "segmentation": segmentation,
-        }
+        return MultiTaskOutput(
+            classification=classification,
+            localization=localization,
+            segmentation=segmentation,
+        )
 
 
 MultiTaskVGG = MultiTaskPerceptionModel
