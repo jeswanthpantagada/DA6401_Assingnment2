@@ -11,21 +11,21 @@ covering classification, object localization, and semantic segmentation under a 
 
 ## Project Structure
 da6401_assignment_2/
-models/
-__init__.py
-layers.py — Custom Dropout (inverted scaling, no nn.Dropout)
-vgg11.py — VGG11 encoder with skip-connection support
-classification.py — VGG11 + fully connected head for 37-class breed classification
-localization.py — VGG11 encoder + regression head for bounding box prediction
-segmentation.py — UNet-VGG11 model with Dice Loss and Segmentation Loss
-multitask.py — Unified MultiTaskPerceptionModel
-losses/
-__init__.py
-iou_loss.py — Custom IoU Loss implementation without external libraries
-pets_dataset.py — Oxford-IIIT Pet Dataset loader using Albumentations
-notebooks/
-da6401_wandb_report.ipynb — Weights & Biases report notebook, ready for Kaggle
-README.md — Project documentation and instructions
+├── models/
+│   ├── __init__.py
+│   ├── layers.py               # Custom Dropout (inverted scaling, no nn.Dropout)
+│   ├── vgg11.py                # VGG11 encoder with skip-connection support
+│   ├── classification.py       # VGG11 + FC head (37-class breed classifier)
+│   ├── localization.py         # VGG11 encoder + regression head (bbox)
+│   ├── segmentation.py         # UNetVGG11 + DiceLoss + SegmentationLoss
+│   └── multitask.py            # Unified MultiTaskPerceptionModel
+├── losses/
+│   ├── __init__.py
+│   └── iou_loss.py             # Custom IoU Loss (no external libraries)
+├── notebooks/
+│   └── da6401_wandb_report.ipynb   # W&B report notebook (Kaggle-ready)
+├── pets_dataset.py             # Oxford-IIIT PetDataset with albumentations
+└── README.md
 ---
 
 ## Tasks Implemented
